@@ -203,6 +203,8 @@ final class MockPumpManagerSettingsViewController: UITableViewController {
                         return "x22"
                     case .medtronicX23:
                         return "x23"
+                    case .dana:
+                        return "Dana"
                     case .custom:
                         return "Custom"
                     }
