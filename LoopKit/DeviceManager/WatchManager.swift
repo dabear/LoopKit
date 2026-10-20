@@ -28,6 +28,70 @@ public struct WatchCapabilities: OptionSet, Sendable {
     /// Loop's glucose alert settings and alert mute, for watches that alarm on
     /// their own instead of mirroring the phone's notifications.
     public static let alerts = WatchCapabilities(rawValue: 1 << 4)
+    /// Boluses requested from the watch. The plugin must authenticate each
+    /// request; the host then applies its own permission and safety checks.
+    public static let bolus = WatchCapabilities(rawValue: 1 << 5)
+}
+
+/// What a watch needs to request a bolus, sent with `.bolus`.
+public struct WatchBolusContext: Equatable {
+    /// Identifies the state the recommendation was computed from. A request must
+    /// echo it, and the host rejects requests made against an older state.
+    public var token: UUID
+
+    /// When the host issued this context.
+    public var issuedAt: Date
+
+    /// The current manual bolus recommendation, in units. `nil` when Loop
+    /// recommends no bolus; the host then rejects watch boluses.
+    public var recommendedBolus: Double?
+
+    /// The user's maximum bolus, in units.
+    public var maximumBolus: Double?
+
+    /// Bolus volumes the pump can deliver, in units.
+    public var supportedBolusVolumes: [Double]
+
+    public init(token: UUID, issuedAt: Date, recommendedBolus: Double?, maximumBolus: Double?, supportedBolusVolumes: [Double]) {
+        self.token = token
+        self.issuedAt = issuedAt
+        self.recommendedBolus = recommendedBolus
+        self.maximumBolus = maximumBolus
+        self.supportedBolusVolumes = supportedBolusVolumes
+    }
+}
+
+/// A bolus the user confirmed on the watch, after the plugin authenticated it.
+public struct WatchBolusRequest: Equatable {
+    public var units: Double
+    /// `WatchBolusContext.token` from the snapshot the watch showed.
+    public var contextToken: UUID
+    /// When the user confirmed the bolus on the watch.
+    public var requestedAt: Date
+
+    public init(units: Double, contextToken: UUID, requestedAt: Date) {
+        self.units = units
+        self.contextToken = contextToken
+        self.requestedAt = requestedAt
+    }
+}
+
+/// Why the host did not deliver a watch bolus.
+public enum WatchBolusError: Error, Equatable {
+    /// Watch boluses are turned off, or the plugin lacks `.bolus`.
+    case notAllowed
+    case invalidAmount
+    /// The request is too old, or dated in the future.
+    case expiredRequest
+    /// The request was made against an older state than the current one.
+    case staleContext
+    case exceedsMaximumBolus
+    case exceedsRecommendation
+    /// Too soon after the previous watch bolus.
+    case rateLimited
+    /// Watch boluses in the last 24 hours would exceed the daily limit.
+    case dailyLimitReached
+    case deliveryFailed(String)
 }
 
 /// The state a watch shows, built by the host from the same data it sends to
@@ -41,6 +105,10 @@ public struct WatchStatusSnapshot: Equatable {
     public static let historyInterval: TimeInterval = .hours(3)
 
     public var displayUnit: LoopUnit
+
+    /// Bolus context, with `.bolus`. Replaced whenever the recommendation, the
+    /// maximum bolus or the latest glucose changes, and after each watch bolus.
+    public var bolusContext: WatchBolusContext?
 
     /// The latest stored glucose sample, including user-entered and display-only
     /// samples; check their flags before showing one as a CGM reading.
@@ -74,7 +142,8 @@ public struct WatchStatusSnapshot: Equatable {
         insulinOnBoard: Double? = nil,
         carbsOnBoard: Double? = nil,
         lastLoopCompleted: Date? = nil,
-        isClosedLoop: Bool? = nil
+        isClosedLoop: Bool? = nil,
+        bolusContext: WatchBolusContext? = nil
     ) {
         self.displayUnit = displayUnit
         self.glucose = glucose
@@ -84,6 +153,7 @@ public struct WatchStatusSnapshot: Equatable {
         self.carbsOnBoard = carbsOnBoard
         self.lastLoopCompleted = lastLoopCompleted
         self.isClosedLoop = isClosedLoop
+        self.bolusContext = bolusContext
     }
 }
 
@@ -158,6 +228,15 @@ public protocol WatchManagerDelegate: DeviceManagerDelegate {
     /// Asks the delegate to send the current snapshot and alert state again, for
     /// example after the watch reconnects.
     func watchManagerRequestsRefresh(_ manager: WatchManager)
+
+    /// Asks the host to deliver a bolus the user confirmed on the watch. Call
+    /// only after authenticating the request. The host checks its own
+    /// permission, the request's age and context, the maximum bolus, the
+    /// recommendation and rate limits before delivering.
+    ///
+    /// - Returns: The delivered units, rounded to a supported volume.
+    /// - Throws: `WatchBolusError`.
+    func watchManager(_ manager: WatchManager, requestBolus request: WatchBolusRequest) async throws -> Double
 }
 
 /// A watch that shows Loop's state, implemented by a plugin.
