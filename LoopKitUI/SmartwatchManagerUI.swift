@@ -1,5 +1,5 @@
 //
-//  WatchManagerUI.swift
+//  SmartwatchManagerUI.swift
 //  LoopKitUI
 //
 //  Copyright © 2026 LoopKit Authors. All rights reserved.
@@ -9,7 +9,7 @@ import UIKit
 import LoopKit
 import LoopAlgorithm
 
-public struct WatchManagerDescriptor {
+public struct SmartwatchManagerDescriptor {
     public let identifier: String
     public let localizedTitle: String
     /// The watches the plugin supports, or other details shown under the title in the picker
@@ -32,9 +32,9 @@ public struct WatchManagerDescriptor {
     }
 }
 
-public typealias WatchManagerViewController = (UIViewController & WatchManagerOnboarding & CompletionNotifying)
+public typealias SmartwatchManagerViewController = (UIViewController & SmartwatchManagerOnboarding & CompletionNotifying)
 
-public protocol WatchManagerUI: WatchManager, DeviceManagerUI, DisplayGlucoseUnitObserver {
+public protocol SmartwatchManagerUI: SmartwatchManager, DeviceManagerUI, DisplayGlucoseUnitObserver {
     /// Create and onboard a new watch manager.
     ///
     /// - Parameters:
@@ -43,7 +43,7 @@ public protocol WatchManagerUI: WatchManager, DeviceManagerUI, DisplayGlucoseUni
     ///     - colorPalette: Color palette to use for any UI.
     /// - Returns: Either a conforming view controller to create and onboard the watch manager or a newly created and onboarded watch manager.
     @MainActor
-    static func setupViewController(bluetoothProvider: BluetoothProvider, displayGlucosePreference: DisplayGlucosePreference, colorPalette: LoopUIColorPalette, allowDebugFeatures: Bool) -> SetupUIResult<WatchManagerViewController, WatchManagerUI>
+    static func setupViewController(bluetoothProvider: BluetoothProvider, displayGlucosePreference: DisplayGlucosePreference, colorPalette: LoopUIColorPalette, allowDebugFeatures: Bool) -> SetupUIResult<SmartwatchManagerViewController, SmartwatchManagerUI>
 
     /// Configure settings for an existing watch manager.
     ///
@@ -53,13 +53,13 @@ public protocol WatchManagerUI: WatchManager, DeviceManagerUI, DisplayGlucoseUni
     ///     - colorPalette: Color palette to use for any UI.
     /// - Returns: A view controller to configure an existing watch manager.
     @MainActor
-    func settingsViewController(bluetoothProvider: BluetoothProvider, displayGlucosePreference: DisplayGlucosePreference, colorPalette: LoopUIColorPalette, allowDebugFeatures: Bool) -> WatchManagerViewController
+    func settingsViewController(bluetoothProvider: BluetoothProvider, displayGlucosePreference: DisplayGlucosePreference, colorPalette: LoopUIColorPalette, allowDebugFeatures: Bool) -> SmartwatchManagerViewController
 
     /// A message from the watch that needs to be brought to the user's attention in Settings → Devices.
     var watchStatusHighlight: DeviceStatusHighlight? { get }
 }
 
-extension WatchManagerUI {
+extension SmartwatchManagerUI {
     public var watchStatusHighlight: DeviceStatusHighlight? { nil }
 
     /// When conformance to the DisplayGlucoseUnitObserver is desired, use this function to be notified when the user display glucose unit changes
@@ -69,22 +69,22 @@ extension WatchManagerUI {
 }
 
 @MainActor
-public protocol WatchManagerOnboardingDelegate: AnyObject {
+public protocol SmartwatchManagerOnboardingDelegate: AnyObject {
     /// Informs the delegate that the specified watch manager was created.
     ///
     /// - Parameters:
-    ///     - watchManager: The watch manager created.
-    func watchManagerOnboarding(didCreateWatchManager watchManager: WatchManagerUI)
+    ///     - smartwatchManager: The watch manager created.
+    func smartwatchManagerOnboarding(didCreateSmartwatchManager smartwatchManager: SmartwatchManagerUI)
 
     /// Informs the delegate that the specified watch manager was onboarded.
     ///
     /// - Parameters:
-    ///     - watchManager: The watch manager onboarded.
-    func watchManagerOnboarding(didOnboardWatchManager watchManager: WatchManagerUI)
+    ///     - smartwatchManager: The watch manager onboarded.
+    func smartwatchManagerOnboarding(didOnboardSmartwatchManager smartwatchManager: SmartwatchManagerUI)
 }
 
 @MainActor
-public protocol WatchManagerOnboarding {
+public protocol SmartwatchManagerOnboarding {
     /// Delegate to notify about watch manager onboarding.
-    var watchManagerOnboardingDelegate: WatchManagerOnboardingDelegate? { get set }
+    var smartwatchManagerOnboardingDelegate: SmartwatchManagerOnboardingDelegate? { get set }
 }

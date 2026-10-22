@@ -14,8 +14,8 @@ public protocol CGMManagerUIPlugin {
     var cgmManagerType: CGMManagerUI.Type? { get }
 }
 
-public protocol WatchManagerUIPlugin {
-    var watchManagerType: WatchManagerUI.Type? { get }
+public protocol SmartwatchManagerUIPlugin {
+    var smartwatchManagerType: SmartwatchManagerUI.Type? { get }
 }
 
 public protocol ServiceUIPlugin {

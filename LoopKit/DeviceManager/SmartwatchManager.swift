@@ -1,5 +1,5 @@
 //
-//  WatchManager.swift
+//  SmartwatchManager.swift
 //  LoopKit
 //
 //  Copyright © 2026 LoopKit Authors. All rights reserved.
@@ -214,20 +214,20 @@ public struct WatchGlucoseAlertState: Equatable {
     }
 }
 
-public protocol WatchManagerDelegate: DeviceManagerDelegate {
+public protocol SmartwatchManagerDelegate: DeviceManagerDelegate {
     /// Informs the delegate that the manager's `rawState` changed and should be saved.
-    func watchManagerDidUpdateState(_ manager: WatchManager)
+    func smartwatchManagerDidUpdateState(_ manager: SmartwatchManager)
 
     /// Asks the delegate to remove the manager.
-    func watchManagerWantsDeletion(_ manager: WatchManager) async
+    func smartwatchManagerWantsDeletion(_ manager: SmartwatchManager) async
 
     /// Stored glucose samples since `start`, oldest first, for a watch that needs
     /// more history than the snapshots carry.
-    func watchManager(_ manager: WatchManager, glucoseSamplesSince start: Date) async throws -> [StoredGlucoseSample]
+    func smartwatchManager(_ manager: SmartwatchManager, glucoseSamplesSince start: Date) async throws -> [StoredGlucoseSample]
 
     /// Asks the delegate to send the current snapshot and alert state again, for
     /// example after the watch reconnects.
-    func watchManagerRequestsRefresh(_ manager: WatchManager)
+    func smartwatchManagerRequestsRefresh(_ manager: SmartwatchManager)
 
     /// Asks the host to deliver a bolus the user confirmed on the watch. Call
     /// only after authenticating the request. The host checks its own
@@ -236,17 +236,17 @@ public protocol WatchManagerDelegate: DeviceManagerDelegate {
     ///
     /// - Returns: The delivered units, rounded to a supported volume.
     /// - Throws: `WatchBolusError`.
-    func watchManager(_ manager: WatchManager, requestBolus request: WatchBolusRequest) async throws -> Double
+    func smartwatchManager(_ manager: SmartwatchManager, requestBolus request: WatchBolusRequest) async throws -> Double
 }
 
 /// A watch that shows Loop's state, implemented by a plugin.
 ///
 /// The host calls the update methods on the main actor; delegate methods are
 /// called on `delegateQueue`.
-public protocol WatchManager: DeviceManager {
-    var watchManagerDelegate: WatchManagerDelegate? { get set }
+public protocol SmartwatchManager: DeviceManager {
+    var smartwatchManagerDelegate: SmartwatchManagerDelegate? { get set }
 
-    /// The queue on which WatchManagerDelegate methods are called.
+    /// The queue on which SmartwatchManagerDelegate methods are called.
     /// Setting to nil resets to a default provided by the manager.
     var delegateQueue: DispatchQueue! { get set }
 
@@ -266,7 +266,7 @@ public protocol WatchManager: DeviceManager {
     func delete(completion: @escaping () -> Void)
 }
 
-public extension WatchManager {
+public extension SmartwatchManager {
     @MainActor
     func glucoseAlertStateDidUpdate(_ state: WatchGlucoseAlertState) {}
 
@@ -277,7 +277,7 @@ public extension WatchManager {
     func notifyDelegateOfDeletion(completion: @escaping () -> Void) {
         delegateQueue.async {
             Task {
-                await self.watchManagerDelegate?.watchManagerWantsDeletion(self)
+                await self.smartwatchManagerDelegate?.smartwatchManagerWantsDeletion(self)
                 completion()
             }
         }
