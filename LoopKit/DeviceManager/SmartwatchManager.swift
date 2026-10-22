@@ -328,8 +328,11 @@ public extension SmartwatchManager {
     }
 
     // Watches don't issue LoopKit alerts by default. Defaulting these keeps
-    // plugins independent of the host's AlertResponder signature.
+    // plugins independent of the host's AlertResponder signature: LoopKit
+    // variants with the callback form (such as Trio's) use the second one,
+    // so this file builds unchanged in both.
     func acknowledgeAlert(alertIdentifier: Alert.AlertIdentifier) async throws {}
+    func acknowledgeAlert(alertIdentifier: Alert.AlertIdentifier, completion: @escaping (Error?) -> Void) { completion(nil) }
     func getSoundBaseURL() -> URL? { nil }
     func getSounds() -> [Alert.Sound] { [] }
 }
