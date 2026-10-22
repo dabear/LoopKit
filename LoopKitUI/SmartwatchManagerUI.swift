@@ -7,7 +7,6 @@
 
 import UIKit
 import LoopKit
-import LoopAlgorithm
 
 public struct SmartwatchManagerDescriptor {
     public let identifier: String
@@ -34,7 +33,9 @@ public struct SmartwatchManagerDescriptor {
 
 public typealias SmartwatchManagerViewController = (UIViewController & SmartwatchManagerOnboarding & CompletionNotifying)
 
-public protocol SmartwatchManagerUI: SmartwatchManager, DeviceManagerUI, DisplayGlucoseUnitObserver {
+/// The display unit reaches the plugin in each `SmartwatchStatusSnapshot`, so
+/// the UI protocol doesn't observe unit changes separately.
+public protocol SmartwatchManagerUI: SmartwatchManager, DeviceManagerUI {
     /// Create and onboard a new watch manager.
     ///
     /// - Parameters:
@@ -61,11 +62,6 @@ public protocol SmartwatchManagerUI: SmartwatchManager, DeviceManagerUI, Display
 
 extension SmartwatchManagerUI {
     public var watchStatusHighlight: DeviceStatusHighlight? { nil }
-
-    /// When conformance to the DisplayGlucoseUnitObserver is desired, use this function to be notified when the user display glucose unit changes
-    public func unitDidChange(to displayGlucoseUnit: LoopUnit) {
-        // optional
-    }
 }
 
 @MainActor
