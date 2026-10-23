@@ -7,6 +7,12 @@
 
 import Foundation
 
+// This protocol family is intentionally free of `DeviceManager` and of any other
+// LoopKit type, so the same plugin builds against any AID's LoopKit (Loop loads it
+// dynamically; Trio imports it statically). A host that wants the watch under its
+// Devices section with device logs adds `DeviceManager` conformance in a plugin-side
+// extension; nothing here requires it.
+
 /// What a watch plugin shows. The host only builds and sends the parts a
 /// plugin declares.
 public struct SmartwatchCapabilities: OptionSet, Sendable {
@@ -24,8 +30,9 @@ public struct SmartwatchCapabilities: OptionSet, Sendable {
     public static let prediction = SmartwatchCapabilities(rawValue: 1 << 2)
     /// Insulin and carbs on board, last loop completion and closed loop state.
     public static let loopStatus = SmartwatchCapabilities(rawValue: 1 << 3)
-    /// Loop's glucose alert settings and alert mute, for watches that alarm on
-    /// their own instead of mirroring the phone's notifications.
+    /// Host-issued alerts: the host forwards its own alerts to the watch as they
+    /// fire and retracts them, and the watch acknowledges them. The host decides
+    /// what alarms; the watch does not evaluate thresholds itself.
     public static let alerts = SmartwatchCapabilities(rawValue: 1 << 4)
     /// Boluses requested from the watch. The plugin must authenticate each
     /// request; the host then applies its own permission and safety checks.
@@ -100,11 +107,24 @@ public enum SmartwatchGlucoseUnit: Equatable, Sendable {
     case millimolesPerLiter
 }
 
+/// A glucose trend, independent of LoopKit's `GlucoseTrend` so the wire model
+/// carries no LoopKit type. Raw values match `GlucoseTrend` (1...7), so a host
+/// maps with `SmartwatchGlucoseTrend(rawValue:)`.
+public enum SmartwatchGlucoseTrend: Int, Equatable, Sendable, CaseIterable {
+    case upUpUp = 1
+    case upUp
+    case up
+    case flat
+    case down
+    case downDown
+    case downDownDown
+}
+
 /// A stored glucose reading, in mg/dL.
 public struct SmartwatchGlucoseReading: Equatable, Sendable {
     public var date: Date
     public var milligramsPerDeciliter: Double
-    public var trend: GlucoseTrend?
+    public var trend: SmartwatchGlucoseTrend?
     /// mg/dL per minute, if the CGM reports a rate.
     public var trendRate: Double?
     /// Entered by the user, such as a fingerstick.
@@ -112,7 +132,7 @@ public struct SmartwatchGlucoseReading: Equatable, Sendable {
     /// Shown by the CGM but not to be used for dosing or graphs.
     public var isDisplayOnly: Bool
 
-    public init(date: Date, milligramsPerDeciliter: Double, trend: GlucoseTrend? = nil, trendRate: Double? = nil, wasUserEntered: Bool = false, isDisplayOnly: Bool = false) {
+    public init(date: Date, milligramsPerDeciliter: Double, trend: SmartwatchGlucoseTrend? = nil, trendRate: Double? = nil, wasUserEntered: Bool = false, isDisplayOnly: Bool = false) {
         self.date = date
         self.milligramsPerDeciliter = milligramsPerDeciliter
         self.trend = trend
@@ -196,64 +216,61 @@ public struct SmartwatchStatusSnapshot: Equatable {
     }
 }
 
-/// The host's glucose alert settings and mute, for watches that alarm on their own.
-///
-/// The Apple Watch does not need this: it mirrors the phone's notifications.
-public struct SmartwatchGlucoseAlertState: Equatable {
-    /// The active glucose alert profile, in mg/dL.
-    public struct Configuration: Equatable {
-        public var urgentLowThreshold: Double
-        public var lowThreshold: Double
-        public var highThreshold: Double
-        public var urgentLowEnabled: Bool
-        public var lowEnabled: Bool
-        public var highEnabled: Bool
-        public var urgentLowRepeatInterval: TimeInterval
-        /// `nil` when the host alerts once per low episode.
-        public var lowRepeatInterval: TimeInterval?
-        /// `nil` when the host alerts once per high episode.
-        public var highRepeatInterval: TimeInterval?
-
-        public init(
-            urgentLowThreshold: Double,
-            lowThreshold: Double,
-            highThreshold: Double,
-            urgentLowEnabled: Bool,
-            lowEnabled: Bool,
-            highEnabled: Bool,
-            urgentLowRepeatInterval: TimeInterval,
-            lowRepeatInterval: TimeInterval?,
-            highRepeatInterval: TimeInterval?
-        ) {
-            self.urgentLowThreshold = urgentLowThreshold
-            self.lowThreshold = lowThreshold
-            self.highThreshold = highThreshold
-            self.urgentLowEnabled = urgentLowEnabled
-            self.lowEnabled = lowEnabled
-            self.highEnabled = highEnabled
-            self.urgentLowRepeatInterval = urgentLowRepeatInterval
-            self.lowRepeatInterval = lowRepeatInterval
-            self.highRepeatInterval = highRepeatInterval
-        }
-    }
-
-    /// `nil` when the host has no glucose alert settings.
-    public var configuration: Configuration?
-
-    /// `false` while the host leaves glucose alerts to the CGM's own alerts.
-    public var hostAlertsActive: Bool
-
-    /// When the host's alert mute ends, if its alerts are muted now.
-    public var mutedUntil: Date?
-
-    public init(configuration: Configuration?, hostAlertsActive: Bool, mutedUntil: Date?) {
-        self.configuration = configuration
-        self.hostAlertsActive = hostAlertsActive
-        self.mutedUntil = mutedUntil
+/// Identifies a host alert so it can be retracted and acknowledged.
+public struct SmartwatchAlertIdentifier: Equatable, Hashable, Sendable {
+    public var value: String
+    public init(_ value: String) {
+        self.value = value
     }
 }
 
-public protocol SmartwatchManagerDelegate: DeviceManagerDelegate {
+/// How urgent a host alert is. Maps from the host's own interruption levels.
+public enum SmartwatchAlertLevel: Int, Equatable, Sendable {
+    case informational
+    case warning
+    case critical
+}
+
+/// An alert the host issued and forwarded to the watch. The host evaluates its
+/// own alerts (on a background CGM or pump update) and sends the result; the
+/// watch shows and vibrates, and acknowledges back through the delegate.
+public struct SmartwatchAlert: Equatable, Sendable {
+    public var identifier: SmartwatchAlertIdentifier
+    public var level: SmartwatchAlertLevel
+    public var title: String?
+    public var body: String?
+    /// When the host issued the alert.
+    public var issuedAt: Date
+
+    public init(identifier: SmartwatchAlertIdentifier, level: SmartwatchAlertLevel, title: String? = nil, body: String? = nil, issuedAt: Date) {
+        self.identifier = identifier
+        self.level = level
+        self.title = title
+        self.body = body
+        self.issuedAt = issuedAt
+    }
+}
+
+/// One line for the host's device log, sent by the plugin. Mirrors LoopKit's
+/// `DeviceLogEntryType` so a host that keeps a device log maps it directly,
+/// without the plugin depending on `DeviceManagerDelegate`.
+public struct SmartwatchDeviceLogEntry: Equatable, Sendable {
+    public enum EntryType: String, Sendable {
+        case send, receive, error, delegate, delegateResponse, connection
+    }
+    public var type: EntryType
+    public var message: String
+    /// The watch the line is about (for example the watchface UUID), if any.
+    public var deviceIdentifier: String?
+
+    public init(type: EntryType, message: String, deviceIdentifier: String? = nil) {
+        self.type = type
+        self.message = message
+        self.deviceIdentifier = deviceIdentifier
+    }
+}
+
+public protocol SmartwatchManagerDelegate: AnyObject {
     /// Informs the delegate that the manager's `rawState` changed and should be saved.
     func smartwatchManagerDidUpdateState(_ manager: SmartwatchManager)
 
@@ -264,9 +281,16 @@ public protocol SmartwatchManagerDelegate: DeviceManagerDelegate {
     /// history than the snapshots carry.
     func smartwatchManager(_ manager: SmartwatchManager, glucoseSamplesSince start: Date) async throws -> [SmartwatchGlucoseReading]
 
-    /// Asks the delegate to send the current snapshot and alert state again, for
-    /// example after the watch reconnects.
+    /// Asks the delegate to send the current snapshot again, for example after
+    /// the watch reconnects.
     func smartwatchManagerRequestsRefresh(_ manager: SmartwatchManager)
+
+    /// A line for the host's device log. The host routes it to wherever it keeps
+    /// device communication logs; a host without one may ignore it.
+    func smartwatchManager(_ manager: SmartwatchManager, didLogEvent event: SmartwatchDeviceLogEntry)
+
+    /// The user acknowledged a host alert on the watch. Only called with `.alerts`.
+    func smartwatchManager(_ manager: SmartwatchManager, didAcknowledgeAlert identifier: SmartwatchAlertIdentifier) async
 
     /// Asks the host to deliver a bolus the user confirmed on the watch. Call
     /// only after authenticating the request. The host checks its own
@@ -282,7 +306,21 @@ public protocol SmartwatchManagerDelegate: DeviceManagerDelegate {
 ///
 /// The host calls the update methods on the main actor; delegate methods are
 /// called on `delegateQueue`.
-public protocol SmartwatchManager: DeviceManager {
+public protocol SmartwatchManager: AnyObject {
+    typealias RawStateValue = [String: Any]
+
+    /// Recreate the manager from its persisted state. Returns nil if the state
+    /// cannot be restored.
+    init?(rawState: RawStateValue)
+
+    /// The state to persist, so the host can recreate the manager on next launch.
+    var rawState: RawStateValue { get }
+
+    /// A stable identifier for this watch manager, used to persist, restore and
+    /// log it. When the manager also conforms to `Pluggable` (via a host's
+    /// `DeviceManager`), the same value satisfies both.
+    var pluginIdentifier: String { get }
+
     var smartwatchManagerDelegate: SmartwatchManagerDelegate? { get set }
 
     /// The queue on which SmartwatchManagerDelegate methods are called.
@@ -297,17 +335,24 @@ public protocol SmartwatchManager: DeviceManager {
     @MainActor
     func watchDataDidUpdate(_ snapshot: SmartwatchStatusSnapshot)
 
-    /// The host's glucose alert settings or mute changed. Only called with `.alerts`.
+    /// A host alert fired and should show on the watch. Only called with `.alerts`.
     @MainActor
-    func glucoseAlertStateDidUpdate(_ state: SmartwatchGlucoseAlertState)
+    func watchAlertDidIssue(_ alert: SmartwatchAlert)
+
+    /// A host alert was retracted and should clear on the watch. Only called with `.alerts`.
+    @MainActor
+    func watchAlertDidRetract(_ identifier: SmartwatchAlertIdentifier)
 
     /// Stops the manager before it is removed.
     func delete(completion: @escaping () -> Void)
 }
 
 public extension SmartwatchManager {
+    // Alerts are capability-gated; a plugin without `.alerts` need not implement these.
     @MainActor
-    func glucoseAlertStateDidUpdate(_ state: SmartwatchGlucoseAlertState) {}
+    func watchAlertDidIssue(_ alert: SmartwatchAlert) {}
+    @MainActor
+    func watchAlertDidRetract(_ identifier: SmartwatchAlertIdentifier) {}
 
     /// Convenience wrapper for notifying the delegate of deletion on the delegate queue
     ///
@@ -326,13 +371,4 @@ public extension SmartwatchManager {
     func delete(completion: @escaping () -> Void) {
         notifyDelegateOfDeletion(completion: completion)
     }
-
-    // Watches don't issue LoopKit alerts by default. Defaulting these keeps
-    // plugins independent of the host's AlertResponder signature: LoopKit
-    // variants with the callback form (such as Trio's) use the second one,
-    // so this file builds unchanged in both.
-    func acknowledgeAlert(alertIdentifier: Alert.AlertIdentifier) async throws {}
-    func acknowledgeAlert(alertIdentifier: Alert.AlertIdentifier, completion: @escaping (Error?) -> Void) { completion(nil) }
-    func getSoundBaseURL() -> URL? { nil }
-    func getSounds() -> [Alert.Sound] { [] }
 }
