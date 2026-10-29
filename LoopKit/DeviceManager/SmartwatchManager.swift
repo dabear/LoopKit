@@ -26,6 +26,8 @@ public struct SmartwatchCapabilities: OptionSet, Sendable {
     public static let glucose = SmartwatchCapabilities(rawValue: 1 << 0)
     /// Recent glucose readings, for a graph.
     public static let history = SmartwatchCapabilities(rawValue: 1 << 1)
+    /// Predicted glucose from the last loop run.
+    public static let prediction = SmartwatchCapabilities(rawValue: 1 << 2)
     /// Insulin and carbs on board, last loop completion and closed loop state.
     public static let loopStatus = SmartwatchCapabilities(rawValue: 1 << 3)
     /// Host-issued alerts: the host forwards its own alerts to the watch as they
@@ -38,8 +40,8 @@ public struct SmartwatchCapabilities: OptionSet, Sendable {
     /// Boluses requested from the watch. The plugin must authenticate each
     /// request; the host then applies its own permission and safety checks.
     public static let remoteBolus = SmartwatchCapabilities(rawValue: 1 << 5)
-    /// Therapy context: basal, insulin sensitivity, eventual glucose, correction
-    /// target and the active preset. Off unless a plugin declares it.
+    /// Therapy context: basal, insulin sensitivity, eventual glucose, sensitivity
+    /// ratio, correction target and the active preset. Off unless a plugin declares it.
     public static let therapy = SmartwatchCapabilities(rawValue: 1 << 6)
     /// The watch can ask the host to mute its alerts. The host acts on it only if
     /// its user allowed muting from the watch.
@@ -49,8 +51,34 @@ public struct SmartwatchCapabilities: OptionSet, Sendable {
     public static let remoteCarbs = SmartwatchCapabilities(rawValue: 1 << 8)
 }
 
+extension SmartwatchCapabilities: CustomStringConvertible {
+    private static let names: [(SmartwatchCapabilities, String)] = [
+        (.glucose, "glucose"),
+        (.history, "history"),
+        (.prediction, "prediction"),
+        (.loopStatus, "loopStatus"),
+        (.alerts, "alerts"),
+        (.remoteBolus, "remoteBolus"),
+        (.therapy, "therapy"),
+        (.remoteMute, "remoteMute"),
+        (.remoteCarbs, "remoteCarbs"),
+    ]
+
+    /// The capability names, for logs, for example "loopStatus, remoteBolus".
+    /// Bits without a name show as their raw value.
+    public var description: String {
+        var parts = Self.names.filter { contains($0.0) }.map(\.1)
+        let unnamed = subtracting(Self.names.reduce(into: []) { $0.formUnion($1.0) })
+        if !unnamed.isEmpty {
+            parts.append("raw value \(unnamed.rawValue)")
+        }
+        return parts.isEmpty ? "none" : parts.joined(separator: ", ")
+    }
+}
+
 /// What the algorithm is working with right now, sent with `.therapy`. Glucose
-/// values are mg/dL. A host leaves out what it doesn't have.
+/// values are mg/dL. A host leaves out what it doesn't have: Loop has no
+/// sensitivity ratio, for example.
 public struct SmartwatchTherapyContext: Equatable, Sendable {
     /// Units per hour of the running temp basal; `nil` while none is running.
     public var tempBasalRate: Double?
@@ -63,6 +91,9 @@ public struct SmartwatchTherapyContext: Equatable, Sendable {
 
     /// mg/dL, where the latest forecast ends.
     public var eventualGlucose: Double?
+
+    /// The algorithm's sensitivity ratio (1 = no adjustment), for hosts that have one.
+    public var sensitivityRatio: Double?
 
     /// mg/dL, the correction range in effect now, including any preset or temp target.
     public var correctionRange: ClosedRange<Double>?
@@ -78,6 +109,7 @@ public struct SmartwatchTherapyContext: Equatable, Sendable {
         scheduledBasalRate: Double? = nil,
         insulinSensitivity: Double? = nil,
         eventualGlucose: Double? = nil,
+        sensitivityRatio: Double? = nil,
         correctionRange: ClosedRange<Double>? = nil,
         activePresetName: String? = nil,
         activePresetEnd: Date? = nil
@@ -86,6 +118,7 @@ public struct SmartwatchTherapyContext: Equatable, Sendable {
         self.scheduledBasalRate = scheduledBasalRate
         self.insulinSensitivity = insulinSensitivity
         self.eventualGlucose = eventualGlucose
+        self.sensitivityRatio = sensitivityRatio
         self.correctionRange = correctionRange
         self.activePresetName = activePresetName
         self.activePresetEnd = activePresetEnd
@@ -214,6 +247,17 @@ public struct SmartwatchGlucoseReading: Equatable, Sendable {
     }
 }
 
+/// One point of the predicted glucose curve, in mg/dL.
+public struct SmartwatchPredictedGlucose: Equatable, Sendable {
+    public var date: Date
+    public var milligramsPerDeciliter: Double
+
+    public init(date: Date, milligramsPerDeciliter: Double) {
+        self.date = date
+        self.milligramsPerDeciliter = milligramsPerDeciliter
+    }
+}
+
 /// The state a watch shows, built by the host.
 ///
 /// The host sends a new snapshot as soon as a new CGM reading is stored, before
@@ -237,6 +281,10 @@ public struct SmartwatchStatusSnapshot: Equatable {
     /// Empty unless the plugin declares `.history`.
     public var glucoseHistory: [SmartwatchGlucoseReading]
 
+    /// Predicted glucose from the last loop run. `nil` unless the plugin
+    /// declares `.prediction`, or before the loop has run.
+    public var predictedGlucose: [SmartwatchPredictedGlucose]?
+
     /// Units of insulin on board, with `.loopStatus`.
     public var insulinOnBoard: Double?
 
@@ -258,6 +306,7 @@ public struct SmartwatchStatusSnapshot: Equatable {
         displayUnit: SmartwatchGlucoseUnit,
         glucose: SmartwatchGlucoseReading?,
         glucoseHistory: [SmartwatchGlucoseReading] = [],
+        predictedGlucose: [SmartwatchPredictedGlucose]? = nil,
         insulinOnBoard: Double? = nil,
         carbsOnBoard: Double? = nil,
         lastLoopCompleted: Date? = nil,
@@ -268,6 +317,7 @@ public struct SmartwatchStatusSnapshot: Equatable {
         self.displayUnit = displayUnit
         self.glucose = glucose
         self.glucoseHistory = glucoseHistory
+        self.predictedGlucose = predictedGlucose
         self.insulinOnBoard = insulinOnBoard
         self.carbsOnBoard = carbsOnBoard
         self.lastLoopCompleted = lastLoopCompleted
@@ -454,6 +504,12 @@ public protocol SmartwatchManager: AnyObject {
     @MainActor
     func watchAlertDidRetract(_ identifier: SmartwatchAlertIdentifier)
 
+    /// A note from the host about the watch, such as why an alert was not sent to
+    /// it or when the host repeats one. The host has already written it to its own
+    /// device log; the plugin may show it in its own log next to the watch traffic.
+    @MainActor
+    func watchHostDidLog(_ message: String)
+
     /// The host received a URL meant for watch plugins, such as a companion
     /// app's callback after the user picked a watch there. Returns whether the
     /// plugin handled it; the host registers the URL scheme. Defaulted to `false`.
@@ -475,11 +531,18 @@ public extension SmartwatchManager {
         Self.capabilities.intersection(requestedCapabilities)
     }
 
+    /// Requested capabilities the plugin doesn't declare; ignored by hosts.
+    var undeclaredRequestedCapabilities: SmartwatchCapabilities {
+        requestedCapabilities.subtracting(Self.capabilities)
+    }
+
     // Alerts are capability-gated; a plugin without `.alerts` need not implement these.
     @MainActor
     func watchAlertDidIssue(_ alert: SmartwatchAlert) {}
     @MainActor
     func watchAlertDidRetract(_ identifier: SmartwatchAlertIdentifier) {}
+    @MainActor
+    func watchHostDidLog(_ message: String) {}
     @MainActor
     func watchHostDidReceiveURL(_ url: URL) -> Bool { false }
 
