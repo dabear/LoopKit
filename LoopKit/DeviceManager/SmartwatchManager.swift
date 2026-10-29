@@ -204,6 +204,10 @@ public enum SmartwatchCarbEntryError: Error, Equatable {
     case notAllowed
     /// The request is too old, or dated in the future.
     case expiredRequest
+    /// Not a positive amount.
+    case invalidAmount
+    /// More than the host's maximum carb entry.
+    case exceedsMaximum
     /// Another carb entry from the watch was added too recently.
     case rateLimited
     case failed(String)
