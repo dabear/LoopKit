@@ -178,10 +178,24 @@ public enum SmartwatchAlertMuteError: Error, Equatable {
     case notAllowed
 }
 
+/// Carbs the user confirmed on the watch, sent with `.remoteCarbs`.
+public struct SmartwatchCarbEntryRequest: Equatable {
+    public var grams: Double
+    /// When the user confirmed the entry on the watch.
+    public var requestedAt: Date
+
+    public init(grams: Double, requestedAt: Date) {
+        self.grams = grams
+        self.requestedAt = requestedAt
+    }
+}
+
 /// Why the host did not add a carb entry the watch asked for.
 public enum SmartwatchCarbEntryError: Error, Equatable {
     /// The user hasn't allowed carb entries from the watch, or the plugin lacks `.remoteCarbs`.
     case notAllowed
+    /// The request is too old, or dated in the future.
+    case expiredRequest
     /// Another carb entry from the watch was added too recently.
     case rateLimited
     case failed(String)
@@ -202,6 +216,8 @@ public enum SmartwatchBolusError: Error, Equatable {
     case rateLimited
     /// Watch boluses in the last 24 hours would exceed the daily limit.
     case dailyLimitReached
+    /// The same bolus is still being delivered; its result follows. Not a failure.
+    case inProgress
     case deliveryFailed(String)
 }
 
@@ -442,12 +458,12 @@ public protocol SmartwatchManagerDelegate: AnyObject {
     /// - Throws: `SmartwatchAlertMuteError`.
     func smartwatchManager(_ manager: SmartwatchManager, requestAlertMute duration: TimeInterval) async throws -> Date
 
-    /// The user asked on the watch to add `grams` of carbs now. Only called with
+    /// The user asked on the watch to add carbs now. Only called with
     /// `.remoteCarbs`; the host decides whether its user allowed it.
     ///
     /// - Returns: The grams added.
     /// - Throws: `SmartwatchCarbEntryError`.
-    func smartwatchManager(_ manager: SmartwatchManager, requestCarbEntry grams: Double) async throws -> Double
+    func smartwatchManager(_ manager: SmartwatchManager, requestCarbEntry request: SmartwatchCarbEntryRequest) async throws -> Double
 }
 
 public extension SmartwatchManagerDelegate {
@@ -455,7 +471,7 @@ public extension SmartwatchManagerDelegate {
         throw SmartwatchAlertMuteError.notAllowed
     }
 
-    func smartwatchManager(_ manager: SmartwatchManager, requestCarbEntry grams: Double) async throws -> Double {
+    func smartwatchManager(_ manager: SmartwatchManager, requestCarbEntry request: SmartwatchCarbEntryRequest) async throws -> Double {
         throw SmartwatchCarbEntryError.notAllowed
     }
 }
