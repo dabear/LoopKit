@@ -35,9 +35,18 @@ public struct SmartwatchCapabilities: OptionSet, Sendable {
     /// forwards none while muted; a host whose critical alerts bypass its mute
     /// may forward those.
     public static let alerts = SmartwatchCapabilities(rawValue: 1 << 4)
+    /// Boluses requested from the watch. The plugin must authenticate each
+    /// request; the host then applies its own permission and safety checks.
+    public static let remoteBolus = SmartwatchCapabilities(rawValue: 1 << 5)
     /// Therapy context: basal, insulin sensitivity, eventual glucose, correction
     /// target and the active preset. Off unless a plugin declares it.
     public static let therapy = SmartwatchCapabilities(rawValue: 1 << 6)
+    /// The watch can ask the host to mute its alerts. The host acts on it only if
+    /// its user allowed muting from the watch.
+    public static let remoteMute = SmartwatchCapabilities(rawValue: 1 << 7)
+    /// The watch can ask the host to add a carb entry. The host acts on it only
+    /// if its user allowed it.
+    public static let remoteCarbs = SmartwatchCapabilities(rawValue: 1 << 8)
 }
 
 /// What the algorithm is working with right now, sent with `.therapy`. Glucose
@@ -81,6 +90,86 @@ public struct SmartwatchTherapyContext: Equatable, Sendable {
         self.activePresetName = activePresetName
         self.activePresetEnd = activePresetEnd
     }
+}
+
+/// What a watch needs to request a bolus, sent with `.remoteBolus`.
+public struct SmartwatchBolusContext: Equatable {
+    /// Identifies the state the recommendation was computed from. A request must
+    /// echo it, and the host rejects requests made against an older state.
+    public var token: UUID
+
+    /// When the host issued this context.
+    public var issuedAt: Date
+
+    /// The current manual bolus recommendation, in units. `nil` when the host
+    /// recommends no bolus; the host then rejects watch boluses.
+    public var recommendedBolus: Double?
+
+    /// The user's maximum bolus, in units.
+    public var maximumBolus: Double?
+
+    /// Bolus volumes the pump can deliver, in units.
+    public var supportedBolusVolumes: [Double]
+
+    public init(token: UUID, issuedAt: Date, recommendedBolus: Double?, maximumBolus: Double?, supportedBolusVolumes: [Double]) {
+        self.token = token
+        self.issuedAt = issuedAt
+        self.recommendedBolus = recommendedBolus
+        self.maximumBolus = maximumBolus
+        self.supportedBolusVolumes = supportedBolusVolumes
+    }
+}
+
+/// A bolus the user confirmed on the watch, after the plugin authenticated it.
+public struct SmartwatchBolusRequest: Equatable {
+    public var units: Double
+    /// `SmartwatchBolusContext.token` from the snapshot the watch showed.
+    public var contextToken: UUID
+    /// When the user confirmed the bolus on the watch.
+    public var requestedAt: Date
+    /// Asks the host to skip only its recommendation check; every other check
+    /// (permission, ages, maximum bolus, rate limits) still applies.
+    public var isForced: Bool
+
+    public init(units: Double, contextToken: UUID, requestedAt: Date, isForced: Bool = false) {
+        self.units = units
+        self.contextToken = contextToken
+        self.requestedAt = requestedAt
+        self.isForced = isForced
+    }
+}
+
+/// Why the host refused a mute request from the watch.
+public enum SmartwatchAlertMuteError: Error, Equatable {
+    /// The user hasn't allowed muting from the watch, or the plugin lacks `.remoteMute`.
+    case notAllowed
+}
+
+/// Why the host did not add a carb entry the watch asked for.
+public enum SmartwatchCarbEntryError: Error, Equatable {
+    /// The user hasn't allowed carb entries from the watch, or the plugin lacks `.remoteCarbs`.
+    case notAllowed
+    /// Another carb entry from the watch was added too recently.
+    case rateLimited
+    case failed(String)
+}
+
+/// Why the host did not deliver a watch bolus.
+public enum SmartwatchBolusError: Error, Equatable {
+    /// Watch boluses are turned off, or the plugin lacks `.remoteBolus`.
+    case notAllowed
+    case invalidAmount
+    /// The request is too old, or dated in the future.
+    case expiredRequest
+    /// The request was made against an older state than the current one.
+    case staleContext
+    case exceedsMaximumBolus
+    case exceedsRecommendation
+    /// Too soon after the previous watch bolus.
+    case rateLimited
+    /// Watch boluses in the last 24 hours would exceed the daily limit.
+    case dailyLimitReached
+    case deliveryFailed(String)
 }
 
 /// A glucose display unit. Plugins get plain values instead of a quantity type,
@@ -136,6 +225,10 @@ public struct SmartwatchStatusSnapshot: Equatable {
 
     public var displayUnit: SmartwatchGlucoseUnit
 
+    /// Bolus context, with `.remoteBolus`. Replaced whenever the recommendation, the
+    /// maximum bolus or the latest glucose changes, and after each watch bolus.
+    public var bolusContext: SmartwatchBolusContext?
+
     /// The latest stored reading, including user-entered and display-only
     /// readings; check their flags before showing one as a CGM reading.
     public var glucose: SmartwatchGlucoseReading?
@@ -169,6 +262,7 @@ public struct SmartwatchStatusSnapshot: Equatable {
         carbsOnBoard: Double? = nil,
         lastLoopCompleted: Date? = nil,
         isClosedLoop: Bool? = nil,
+        bolusContext: SmartwatchBolusContext? = nil,
         therapy: SmartwatchTherapyContext? = nil
     ) {
         self.displayUnit = displayUnit
@@ -178,6 +272,7 @@ public struct SmartwatchStatusSnapshot: Equatable {
         self.carbsOnBoard = carbsOnBoard
         self.lastLoopCompleted = lastLoopCompleted
         self.isClosedLoop = isClosedLoop
+        self.bolusContext = bolusContext
         self.therapy = therapy
     }
 }
@@ -280,6 +375,39 @@ public protocol SmartwatchManagerDelegate: AnyObject {
     /// A line for the host's device log. The host routes it to wherever it keeps
     /// device communication logs; a host without one may ignore it.
     func smartwatchManager(_ manager: SmartwatchManager, didLogEvent event: SmartwatchDeviceLogEntry)
+
+    /// Asks the host to deliver a bolus the user confirmed on the watch. Call
+    /// only after authenticating the request. The host checks its own
+    /// permission, the request's age and context, the maximum bolus, the
+    /// recommendation and rate limits before delivering.
+    ///
+    /// - Returns: The delivered units, rounded to a supported volume.
+    /// - Throws: `SmartwatchBolusError`.
+    func smartwatchManager(_ manager: SmartwatchManager, requestBolus request: SmartwatchBolusRequest) async throws -> Double
+
+    /// The user asked on the watch to mute the host's alerts for `duration`.
+    /// Only called with `.remoteMute`; the host decides whether its user allowed it.
+    ///
+    /// - Returns: When the mute ends.
+    /// - Throws: `SmartwatchAlertMuteError`.
+    func smartwatchManager(_ manager: SmartwatchManager, requestAlertMute duration: TimeInterval) async throws -> Date
+
+    /// The user asked on the watch to add `grams` of carbs now. Only called with
+    /// `.remoteCarbs`; the host decides whether its user allowed it.
+    ///
+    /// - Returns: The grams added.
+    /// - Throws: `SmartwatchCarbEntryError`.
+    func smartwatchManager(_ manager: SmartwatchManager, requestCarbEntry grams: Double) async throws -> Double
+}
+
+public extension SmartwatchManagerDelegate {
+    func smartwatchManager(_ manager: SmartwatchManager, requestAlertMute duration: TimeInterval) async throws -> Date {
+        throw SmartwatchAlertMuteError.notAllowed
+    }
+
+    func smartwatchManager(_ manager: SmartwatchManager, requestCarbEntry grams: Double) async throws -> Double {
+        throw SmartwatchCarbEntryError.notAllowed
+    }
 }
 
 /// A watch that shows the host app's state, implemented by a plugin.
@@ -340,7 +468,8 @@ public extension SmartwatchManager {
     var requestedCapabilities: SmartwatchCapabilities { Self.capabilities }
 
     /// What the host acts on: the requested capabilities the plugin declares.
-    /// Hosts use this for every capability check (snapshot contents and alerts), so a plugin can't obtain a capability it didn't declare.
+    /// Hosts use this for every capability check (snapshot contents, alerts and
+    /// remote actions), so a plugin can't obtain a capability it didn't declare.
     /// Not a protocol requirement, so a plugin can't override it.
     var effectiveCapabilities: SmartwatchCapabilities {
         Self.capabilities.intersection(requestedCapabilities)
