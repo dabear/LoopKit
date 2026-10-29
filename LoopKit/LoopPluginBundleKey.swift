@@ -20,4 +20,6 @@ public enum LoopPluginBundleKey: String {
     case serviceIdentifier = "com.loopkit.Loop.ServiceIdentifier"
     case statefulPluginIdentifier = "com.loopkit.Loop.StatefulPluginIdentifier"
     case supportIdentifier = "com.loopkit.Loop.SupportIdentifier"
+    case smartwatchManagerDisplayName = "com.loopkit.Loop.SmartwatchManagerDisplayName"
+    case smartwatchManagerIdentifier = "com.loopkit.Loop.SmartwatchManagerIdentifier"
 }
