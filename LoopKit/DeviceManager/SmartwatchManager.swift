@@ -49,6 +49,12 @@ public struct SmartwatchCapabilities: OptionSet, Sendable {
     /// The watch can ask the host to add a carb entry. The host acts on it only
     /// if its user allowed it.
     public static let remoteCarbs = SmartwatchCapabilities(rawValue: 1 << 8)
+    /// The watch can ask the host to start or end an override preset. The host
+    /// sends its presets and acts on requests only if its user allowed it.
+    public static let remoteOverride = SmartwatchCapabilities(rawValue: 1 << 9)
+    /// The watch can ask the host to start or end a temp target preset, for hosts
+    /// that have temp targets. The host acts on it only if its user allowed it.
+    public static let remoteTempTarget = SmartwatchCapabilities(rawValue: 1 << 10)
 }
 
 extension SmartwatchCapabilities: CustomStringConvertible {
@@ -62,6 +68,8 @@ extension SmartwatchCapabilities: CustomStringConvertible {
         (.therapy, "therapy"),
         (.remoteMute, "remoteMute"),
         (.remoteCarbs, "remoteCarbs"),
+        (.remoteOverride, "remoteOverride"),
+        (.remoteTempTarget, "remoteTempTarget"),
     ]
 
     /// The capability names, for logs, for example "loopStatus, remoteBolus".
@@ -201,6 +209,67 @@ public enum SmartwatchCarbEntryError: Error, Equatable {
     case failed(String)
 }
 
+/// A preset the watch can start: an override or a temp target.
+public struct SmartwatchPreset: Equatable, Sendable {
+    /// The host's identifier for the preset; send it back to start it.
+    public var id: String
+    public var name: String
+    /// Whether this preset is running now.
+    public var isActive: Bool
+    /// How long the preset runs when started. `nil` means until it is ended.
+    public var duration: TimeInterval?
+
+    public init(id: String, name: String, isActive: Bool, duration: TimeInterval?) {
+        self.id = id
+        self.name = name
+        self.isActive = isActive
+        self.duration = duration
+    }
+}
+
+/// What the watch asks for a preset.
+public enum SmartwatchPresetAction: Equatable, Sendable {
+    /// Start the preset with this `SmartwatchPreset.id`, replacing any running one.
+    case activate(presetID: String)
+    /// End the running preset.
+    case cancel
+}
+
+/// An override the user started or ended on the watch, sent with `.remoteOverride`.
+public struct SmartwatchOverrideRequest: Equatable {
+    public var action: SmartwatchPresetAction
+    /// When the user confirmed it on the watch.
+    public var requestedAt: Date
+
+    public init(action: SmartwatchPresetAction, requestedAt: Date) {
+        self.action = action
+        self.requestedAt = requestedAt
+    }
+}
+
+/// A temp target the user started or ended on the watch, sent with `.remoteTempTarget`.
+public struct SmartwatchTempTargetRequest: Equatable {
+    public var action: SmartwatchPresetAction
+    /// When the user confirmed it on the watch.
+    public var requestedAt: Date
+
+    public init(action: SmartwatchPresetAction, requestedAt: Date) {
+        self.action = action
+        self.requestedAt = requestedAt
+    }
+}
+
+/// Why the host did not start or end an override or temp target.
+public enum SmartwatchPresetError: Error, Equatable {
+    /// The user hasn't allowed it from the watch, or the plugin lacks the capability.
+    case notAllowed
+    /// The request is too old, or dated in the future.
+    case expiredRequest
+    /// No preset has this identifier.
+    case unknownPreset
+    case failed(String)
+}
+
 /// Why the host did not deliver a watch bolus.
 public enum SmartwatchBolusError: Error, Equatable {
     /// Watch boluses are turned off, or the plugin lacks `.remoteBolus`.
@@ -289,6 +358,12 @@ public struct SmartwatchStatusSnapshot: Equatable {
     /// maximum bolus or the latest glucose changes, and after each watch bolus.
     public var bolusContext: SmartwatchBolusContext?
 
+    /// The host's override presets, with `.remoteOverride`.
+    public var overridePresets: [SmartwatchPreset]?
+
+    /// The host's temp target presets, with `.remoteTempTarget`.
+    public var tempTargetPresets: [SmartwatchPreset]?
+
     /// The latest stored reading, including user-entered and display-only
     /// readings; check their flags before showing one as a CGM reading.
     public var glucose: SmartwatchGlucoseReading?
@@ -328,7 +403,9 @@ public struct SmartwatchStatusSnapshot: Equatable {
         lastLoopCompleted: Date? = nil,
         isClosedLoop: Bool? = nil,
         bolusContext: SmartwatchBolusContext? = nil,
-        therapy: SmartwatchTherapyContext? = nil
+        therapy: SmartwatchTherapyContext? = nil,
+        overridePresets: [SmartwatchPreset]? = nil,
+        tempTargetPresets: [SmartwatchPreset]? = nil
     ) {
         self.displayUnit = displayUnit
         self.glucose = glucose
@@ -340,6 +417,8 @@ public struct SmartwatchStatusSnapshot: Equatable {
         self.isClosedLoop = isClosedLoop
         self.bolusContext = bolusContext
         self.therapy = therapy
+        self.overridePresets = overridePresets
+        self.tempTargetPresets = tempTargetPresets
     }
 }
 
@@ -464,15 +543,40 @@ public protocol SmartwatchManagerDelegate: AnyObject {
     /// - Returns: The grams added.
     /// - Throws: `SmartwatchCarbEntryError`.
     func smartwatchManager(_ manager: SmartwatchManager, requestCarbEntry request: SmartwatchCarbEntryRequest) async throws -> Double
+
+    /// The user started or ended an override preset on the watch. Only called with
+    /// `.remoteOverride`; the host decides whether its user allowed it.
+    ///
+    /// - Throws: `SmartwatchPresetError`.
+    func smartwatchManager(_ manager: SmartwatchManager, requestOverride request: SmartwatchOverrideRequest) async throws
+
+    /// The user started or ended a temp target preset on the watch. Only called
+    /// with `.remoteTempTarget`; the host decides whether its user allowed it.
+    ///
+    /// - Throws: `SmartwatchPresetError`.
+    func smartwatchManager(_ manager: SmartwatchManager, requestTempTarget request: SmartwatchTempTargetRequest) async throws
 }
 
+/// Every remote action is refused unless the host implements it.
 public extension SmartwatchManagerDelegate {
+    func smartwatchManager(_ manager: SmartwatchManager, requestBolus request: SmartwatchBolusRequest) async throws -> Double {
+        throw SmartwatchBolusError.notAllowed
+    }
+
     func smartwatchManager(_ manager: SmartwatchManager, requestAlertMute duration: TimeInterval) async throws -> Date {
         throw SmartwatchAlertMuteError.notAllowed
     }
 
     func smartwatchManager(_ manager: SmartwatchManager, requestCarbEntry request: SmartwatchCarbEntryRequest) async throws -> Double {
         throw SmartwatchCarbEntryError.notAllowed
+    }
+
+    func smartwatchManager(_ manager: SmartwatchManager, requestOverride request: SmartwatchOverrideRequest) async throws {
+        throw SmartwatchPresetError.notAllowed
+    }
+
+    func smartwatchManager(_ manager: SmartwatchManager, requestTempTarget request: SmartwatchTempTargetRequest) async throws {
+        throw SmartwatchPresetError.notAllowed
     }
 }
 
