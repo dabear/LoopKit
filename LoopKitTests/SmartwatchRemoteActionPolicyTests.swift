@@ -112,7 +112,7 @@ final class SmartwatchRemoteActionPolicyTests: XCTestCase {
 
     func testAHostCanTightenTheLimits() {
         var limits = SmartwatchBolusPolicy.Limits.standard
-        limits.maximumRequestAge = 10
+        limits.requestWindow.maximumAge = 10
         limits.minimumInterval = 60 * 60
         let strict = SmartwatchBolusPolicy(
             limits: limits,
@@ -194,5 +194,29 @@ final class SmartwatchRemoteActionPolicyTests: XCTestCase {
     func testRateLimitsCarbEntries() {
         XCTAssertEqual(carbPolicy(lastEntry: now.addingTimeInterval(-10 * 60)).evaluate(carbs(30), now: now), .failure(.rateLimited))
         XCTAssertEqual(try? carbPolicy(lastEntry: now.addingTimeInterval(-16 * 60)).evaluate(carbs(30), now: now).get(), 30)
+    }
+
+    // MARK: - Request window
+
+    func testTheRequestWindowAcceptsRequestsUpToItsEdges() {
+        let window = SmartwatchRequestWindow.standard
+        XCTAssertTrue(window.contains(now.addingTimeInterval(-30), now: now))
+        XCTAssertFalse(window.contains(now.addingTimeInterval(-30.5), now: now))
+        XCTAssertTrue(window.contains(now.addingTimeInterval(5), now: now))
+        XCTAssertFalse(window.contains(now.addingTimeInterval(5.5), now: now))
+    }
+
+    func testAStricterWindowAppliesToBothPolicies() {
+        let window = SmartwatchRequestWindow(maximumAge: 10)
+        let bolus = SmartwatchBolusPolicy(
+            limits: .init(requestWindow: window),
+            isAllowed: true,
+            currentContext: context(),
+            recentDeliveries: [],
+            roundToSupportedVolume: { $0 }
+        )
+        XCTAssertEqual(bolus.evaluate(request(1, confirmedAgo: 15), now: now), .failure(.expiredRequest))
+        let carbs = SmartwatchCarbEntryPolicy(limits: .init(requestWindow: window), isAllowed: true, maximumGrams: 100, lastEntry: nil)
+        XCTAssertEqual(carbs.evaluate(self.carbs(30, confirmedAgo: 15), now: now), .failure(.expiredRequest))
     }
 }
