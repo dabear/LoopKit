@@ -7,6 +7,28 @@
 
 import Foundation
 
+/// How fresh a request from the watch must be: confirmed at most `maximumAge`
+/// ago, and dated at most `maximumClockSkew` in the future. A host uses one
+/// window for every remote action: it passes it to the bolus and carb policies
+/// and checks mute and preset requests with it directly.
+public struct SmartwatchRequestWindow: Equatable, Sendable {
+    public var maximumAge: TimeInterval
+    public var maximumClockSkew: TimeInterval
+
+    public init(maximumAge: TimeInterval = 30, maximumClockSkew: TimeInterval = 5) {
+        self.maximumAge = maximumAge
+        self.maximumClockSkew = maximumClockSkew
+    }
+
+    public static let standard = SmartwatchRequestWindow()
+
+    /// Whether a request confirmed at `requestedAt` may still run at `now`.
+    public func contains(_ requestedAt: Date, now: Date) -> Bool {
+        let age = now.timeIntervalSince(requestedAt)
+        return age <= maximumAge && age >= -maximumClockSkew
+    }
+}
+
 /// Decides whether a bolus requested from a watch plugin may be delivered.
 ///
 /// A host calls `evaluate` from its `requestBolus`. The plugin authenticates the
@@ -20,10 +42,8 @@ import Foundation
 public struct SmartwatchBolusPolicy {
     /// How strict the policy is. `standard` is what Loop uses.
     public struct Limits: Equatable, Sendable {
-        /// A request older than this, measured from when the user confirmed it on the watch, is rejected.
-        public var maximumRequestAge: TimeInterval
-        /// Allowed clock skew for requests dated in the future.
-        public var maximumClockSkew: TimeInterval
+        /// How fresh a request must be.
+        public var requestWindow: SmartwatchRequestWindow
         /// A context older than this is rejected even if its token matches.
         public var maximumContextAge: TimeInterval
         /// Minimum time between watch boluses.
@@ -32,27 +52,18 @@ public struct SmartwatchBolusPolicy {
         public var dailyLimitInMaximumBoluses: Double
 
         public init(
-            maximumRequestAge: TimeInterval = 30,
-            maximumClockSkew: TimeInterval = 5,
+            requestWindow: SmartwatchRequestWindow = .standard,
             maximumContextAge: TimeInterval = 15 * 60,
             minimumInterval: TimeInterval = 15 * 60,
             dailyLimitInMaximumBoluses: Double = 2
         ) {
-            self.maximumRequestAge = maximumRequestAge
-            self.maximumClockSkew = maximumClockSkew
+            self.requestWindow = requestWindow
             self.maximumContextAge = maximumContextAge
             self.minimumInterval = minimumInterval
             self.dailyLimitInMaximumBoluses = dailyLimitInMaximumBoluses
         }
 
         public static let standard = Limits()
-
-        /// Whether a request confirmed at `requestedAt` is still fresh at `now`.
-        /// Hosts use the same window for their other remote actions.
-        public func isFresh(_ requestedAt: Date, now: Date) -> Bool {
-            let age = now.timeIntervalSince(requestedAt)
-            return age <= maximumRequestAge && age >= -maximumClockSkew
-        }
     }
 
     /// A watch bolus the host delivered, for the rate limits. Codable, so a host
@@ -102,7 +113,7 @@ public struct SmartwatchBolusPolicy {
         guard request.units.isFinite, request.units > 0 else {
             return .failure(.invalidAmount)
         }
-        guard limits.isFresh(request.requestedAt, now: now) else {
+        guard limits.requestWindow.contains(request.requestedAt, now: now) else {
             return .failure(.expiredRequest)
         }
         guard let context = currentContext,
@@ -219,16 +230,13 @@ public struct SmartwatchBolusContextIssuer {
 /// ones. A host can pass its own `Limits`, add checks, or not use this policy.
 public struct SmartwatchCarbEntryPolicy {
     public struct Limits: Equatable, Sendable {
-        /// A request older than this, measured from when the user confirmed it on the watch, is rejected.
-        public var maximumRequestAge: TimeInterval
-        /// Allowed clock skew for requests dated in the future.
-        public var maximumClockSkew: TimeInterval
+        /// How fresh a request must be.
+        public var requestWindow: SmartwatchRequestWindow
         /// Minimum time between carb entries from the watch.
         public var minimumInterval: TimeInterval
 
-        public init(maximumRequestAge: TimeInterval = 30, maximumClockSkew: TimeInterval = 5, minimumInterval: TimeInterval = 15 * 60) {
-            self.maximumRequestAge = maximumRequestAge
-            self.maximumClockSkew = maximumClockSkew
+        public init(requestWindow: SmartwatchRequestWindow = .standard, minimumInterval: TimeInterval = 15 * 60) {
+            self.requestWindow = requestWindow
             self.minimumInterval = minimumInterval
         }
 
@@ -260,8 +268,7 @@ public struct SmartwatchCarbEntryPolicy {
         guard request.grams.isFinite, request.grams > 0 else {
             return .failure(.invalidAmount)
         }
-        let age = now.timeIntervalSince(request.requestedAt)
-        guard age <= limits.maximumRequestAge, age >= -limits.maximumClockSkew else {
+        guard limits.requestWindow.contains(request.requestedAt, now: now) else {
             return .failure(.expiredRequest)
         }
         guard request.grams <= maximumGrams else {
