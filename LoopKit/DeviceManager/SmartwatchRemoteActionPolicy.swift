@@ -29,6 +29,41 @@ public struct SmartwatchRequestWindow: Equatable, Sendable {
     }
 }
 
+/// Every limit a host applies to one watch's remote actions, from
+/// `SmartwatchManager.remoteActionLimits`: `.standard` unless the plugin declares
+/// its own. One request window covers every action.
+public struct SmartwatchRemoteActionLimits: Equatable, Sendable {
+    public var requestWindow: SmartwatchRequestWindow
+    public var bolus: SmartwatchBolusPolicy.Limits
+    public var carbEntry: SmartwatchCarbEntryPolicy.Limits
+
+    public init(
+        requestWindow: SmartwatchRequestWindow = .standard,
+        bolus: SmartwatchBolusPolicy.Limits = .standard,
+        carbEntry: SmartwatchCarbEntryPolicy.Limits = .standard
+    ) {
+        self.requestWindow = requestWindow
+        self.bolus = bolus
+        self.carbEntry = carbEntry
+    }
+
+    public static let standard = SmartwatchRemoteActionLimits()
+
+    /// The bolus limits with this request window.
+    public var bolusPolicyLimits: SmartwatchBolusPolicy.Limits {
+        var limits = bolus
+        limits.requestWindow = requestWindow
+        return limits
+    }
+
+    /// The carb entry limits with this request window.
+    public var carbEntryPolicyLimits: SmartwatchCarbEntryPolicy.Limits {
+        var limits = carbEntry
+        limits.requestWindow = requestWindow
+        return limits
+    }
+}
+
 /// Decides whether a bolus requested from a watch plugin may be delivered.
 ///
 /// A host calls `evaluate` from its `requestBolus`. The plugin authenticates the
@@ -54,19 +89,30 @@ public struct SmartwatchBolusPolicy {
         public var minimumInterval: TimeInterval
         /// Watch boluses in a rolling 24 hours may total at most this many maximum boluses.
         public var dailyLimitInMaximumBoluses: Double
+        /// A request must quote the current context's token. Off only for a watch
+        /// app that can't send it back: its requests are then checked against the
+        /// current context, which must still be fresh.
+        public var requiresContextToken: Bool
+        /// A request may not exceed the recommendation unless it is forced. Off for
+        /// a watch app that lets the user pick any amount up to the maximum bolus.
+        public var capsAtRecommendation: Bool
 
         public init(
             requestWindow: SmartwatchRequestWindow = .standard,
             maximumContextAge: TimeInterval = 15 * 60,
             maximumGlucoseAge: TimeInterval = 15 * 60,
             minimumInterval: TimeInterval = 15 * 60,
-            dailyLimitInMaximumBoluses: Double = 2
+            dailyLimitInMaximumBoluses: Double = 2,
+            requiresContextToken: Bool = true,
+            capsAtRecommendation: Bool = true
         ) {
             self.requestWindow = requestWindow
             self.maximumContextAge = maximumContextAge
             self.maximumGlucoseAge = maximumGlucoseAge
             self.minimumInterval = minimumInterval
             self.dailyLimitInMaximumBoluses = dailyLimitInMaximumBoluses
+            self.requiresContextToken = requiresContextToken
+            self.capsAtRecommendation = capsAtRecommendation
         }
 
         public static let standard = Limits()
@@ -130,7 +176,7 @@ public struct SmartwatchBolusPolicy {
             return .failure(.noRecentGlucose)
         }
         guard let context = currentContext,
-              context.token == request.contextToken,
+              !limits.requiresContextToken || context.token == request.contextToken,
               now.timeIntervalSince(context.issuedAt) <= limits.maximumContextAge
         else {
             return .failure(.staleContext)
@@ -146,7 +192,7 @@ public struct SmartwatchBolusPolicy {
         // The watch may bolus up to the recommendation the host showed it, rounded
         // the same way; never more, and nothing when the host recommends no bolus.
         // A forced request skips this check only.
-        if !request.isForced {
+        if !request.isForced, limits.capsAtRecommendation {
             guard let recommended = context.recommendedBolus,
                   units <= roundToSupportedVolume(recommended) + Self.tolerance
             else {
