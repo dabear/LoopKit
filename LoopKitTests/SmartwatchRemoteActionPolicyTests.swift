@@ -24,11 +24,13 @@ final class SmartwatchRemoteActionPolicyTests: XCTestCase {
     private func policy(
         allowed: Bool = true,
         context: SmartwatchBolusContext? = nil,
+        glucoseAgo: TimeInterval? = 5 * 60,
         deliveries: [SmartwatchBolusPolicy.Delivery] = []
     ) -> SmartwatchBolusPolicy {
         SmartwatchBolusPolicy(
             isAllowed: allowed,
             currentContext: context ?? self.context(),
+            latestGlucoseDate: glucoseAgo.map { now.addingTimeInterval(-$0) },
             recentDeliveries: deliveries,
             roundToSupportedVolume: { units in Self.supportedVolumes.last { $0 <= units } ?? 0 }
         )
@@ -71,8 +73,15 @@ final class SmartwatchRemoteActionPolicyTests: XCTestCase {
     func testRejectsAStaleOrMissingContext() {
         XCTAssertEqual(policy().evaluate(request(1, token: UUID()), now: now), .failure(.staleContext))
         XCTAssertEqual(policy(context: context(issuedAgo: 16 * 60)).evaluate(request(1), now: now), .failure(.staleContext))
-        let noContext = SmartwatchBolusPolicy(isAllowed: true, currentContext: nil, recentDeliveries: [], roundToSupportedVolume: { $0 })
+        let noContext = SmartwatchBolusPolicy(isAllowed: true, currentContext: nil, latestGlucoseDate: now, recentDeliveries: [], roundToSupportedVolume: { $0 })
         XCTAssertEqual(noContext.evaluate(request(1), now: now), .failure(.staleContext))
+    }
+
+    func testRefusesWithoutRecentGlucoseEvenForced() {
+        XCTAssertEqual(policy(glucoseAgo: nil).evaluate(request(1), now: now), .failure(.noRecentGlucose))
+        XCTAssertEqual(policy(glucoseAgo: 16 * 60).evaluate(request(1), now: now), .failure(.noRecentGlucose))
+        XCTAssertEqual(policy(glucoseAgo: 16 * 60).evaluate(request(1, forced: true), now: now), .failure(.noRecentGlucose))
+        XCTAssertNotNil(try? policy(glucoseAgo: 15 * 60).evaluate(request(1), now: now).get())
     }
 
     func testRejectsMoreThanTheMaximumBolus() {
@@ -126,6 +135,7 @@ final class SmartwatchRemoteActionPolicyTests: XCTestCase {
             limits: limits,
             isAllowed: true,
             currentContext: context(),
+            latestGlucoseDate: now,
             recentDeliveries: [.init(date: now.addingTimeInterval(-30 * 60), units: 0.5)],
             roundToSupportedVolume: { $0 }
         )
@@ -220,6 +230,7 @@ final class SmartwatchRemoteActionPolicyTests: XCTestCase {
             limits: .init(requestWindow: window),
             isAllowed: true,
             currentContext: context(),
+            latestGlucoseDate: now,
             recentDeliveries: [],
             roundToSupportedVolume: { $0 }
         )
