@@ -236,6 +236,24 @@ public struct SmartwatchStatusSnapshot: Equatable {
     /// Basal, sensitivity and target context, with `.therapy`.
     public var therapy: SmartwatchTherapyContext?
 
+    /// The remote actions the user allowed for this watch: a subset of the
+    /// remote capabilities in `effectiveCapabilities`, so a watch can hide what
+    /// is off. Informational only: the host checks its permissions on every request.
+    public var permittedActions: SmartwatchCapabilities
+
+    /// The host's largest carb entry in grams, with `.remoteCarbs`.
+    public var maximumCarbEntry: Double?
+
+    /// The pump's smallest bolus step in units, with `.remoteBolus`, for a watch
+    /// that picks an amount before it has a bolus context.
+    public var bolusIncrement: Double?
+
+    /// The smallest step between a pump's supported bolus volumes, for `bolusIncrement`.
+    public static func bolusIncrement(of supportedBolusVolumes: [Double]) -> Double? {
+        let steps = zip(supportedBolusVolumes.dropFirst(), supportedBolusVolumes).map { $0 - $1 }.filter { $0 > 0 }
+        return steps.min() ?? supportedBolusVolumes.first
+    }
+
     public init(
         displayUnit: SmartwatchGlucoseUnit,
         glucose: SmartwatchGlucoseReading?,
@@ -248,7 +266,10 @@ public struct SmartwatchStatusSnapshot: Equatable {
         bolusContext: SmartwatchBolusContext? = nil,
         therapy: SmartwatchTherapyContext? = nil,
         overridePresets: [SmartwatchPreset]? = nil,
-        tempTargetPresets: [SmartwatchPreset]? = nil
+        tempTargetPresets: [SmartwatchPreset]? = nil,
+        permittedActions: SmartwatchCapabilities = [],
+        maximumCarbEntry: Double? = nil,
+        bolusIncrement: Double? = nil
     ) {
         self.displayUnit = displayUnit
         self.glucose = glucose
@@ -262,6 +283,9 @@ public struct SmartwatchStatusSnapshot: Equatable {
         self.therapy = therapy
         self.overridePresets = overridePresets
         self.tempTargetPresets = tempTargetPresets
+        self.permittedActions = permittedActions
+        self.maximumCarbEntry = maximumCarbEntry
+        self.bolusIncrement = bolusIncrement
     }
 }
 
@@ -454,6 +478,12 @@ public protocol SmartwatchManager: AnyObject {
     /// changes. Defaults to `capabilities`.
     var requestedCapabilities: SmartwatchCapabilities { get }
 
+    /// The limits the host applies to this watch's remote actions. Defaults to
+    /// `.standard`. A plugin may declare its own, for example to match its watch
+    /// app's rules; the host applies them as given, together with its own checks
+    /// (such as Trio's max IOB).
+    var remoteActionLimits: SmartwatchRemoteActionLimits { get }
+
     /// The latest snapshot. Called as soon as a new glucose reading is stored and
     /// whenever the loop's output changes.
     @MainActor
@@ -485,6 +515,7 @@ public protocol SmartwatchManager: AnyObject {
 
 public extension SmartwatchManager {
     var requestedCapabilities: SmartwatchCapabilities { Self.capabilities }
+    var remoteActionLimits: SmartwatchRemoteActionLimits { .standard }
 
     /// What the host acts on: the requested capabilities the plugin declares.
     /// Hosts use this for every capability check (snapshot contents, alerts and
