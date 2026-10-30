@@ -46,6 +46,10 @@ public struct SmartwatchBolusPolicy {
         public var requestWindow: SmartwatchRequestWindow
         /// A context older than this is rejected even if its token matches.
         public var maximumContextAge: TimeInterval
+        /// Every watch bolus, forced ones too, is refused when the newest glucose
+        /// reading is older than this: on the watch the user may not see that
+        /// glucose is missing.
+        public var maximumGlucoseAge: TimeInterval
         /// Minimum time between watch boluses.
         public var minimumInterval: TimeInterval
         /// Watch boluses in a rolling 24 hours may total at most this many maximum boluses.
@@ -54,11 +58,13 @@ public struct SmartwatchBolusPolicy {
         public init(
             requestWindow: SmartwatchRequestWindow = .standard,
             maximumContextAge: TimeInterval = 15 * 60,
+            maximumGlucoseAge: TimeInterval = 15 * 60,
             minimumInterval: TimeInterval = 15 * 60,
             dailyLimitInMaximumBoluses: Double = 2
         ) {
             self.requestWindow = requestWindow
             self.maximumContextAge = maximumContextAge
+            self.maximumGlucoseAge = maximumGlucoseAge
             self.minimumInterval = minimumInterval
             self.dailyLimitInMaximumBoluses = dailyLimitInMaximumBoluses
         }
@@ -86,6 +92,8 @@ public struct SmartwatchBolusPolicy {
     public var isAllowed: Bool
     /// The context the host last sent to the watch.
     public var currentContext: SmartwatchBolusContext?
+    /// When the newest glucose reading was taken, CGM or entered by the user.
+    public var latestGlucoseDate: Date?
     /// Watch boluses delivered recently, for the rate limits.
     public var recentDeliveries: [Delivery]
     /// Rounds to a volume the pump supports.
@@ -95,12 +103,14 @@ public struct SmartwatchBolusPolicy {
         limits: Limits = .standard,
         isAllowed: Bool,
         currentContext: SmartwatchBolusContext?,
+        latestGlucoseDate: Date?,
         recentDeliveries: [Delivery],
         roundToSupportedVolume: @escaping (Double) -> Double
     ) {
         self.limits = limits
         self.isAllowed = isAllowed
         self.currentContext = currentContext
+        self.latestGlucoseDate = latestGlucoseDate
         self.recentDeliveries = recentDeliveries
         self.roundToSupportedVolume = roundToSupportedVolume
     }
@@ -115,6 +125,9 @@ public struct SmartwatchBolusPolicy {
         }
         guard limits.requestWindow.contains(request.requestedAt, now: now) else {
             return .failure(.expiredRequest)
+        }
+        guard let latestGlucoseDate, now.timeIntervalSince(latestGlucoseDate) <= limits.maximumGlucoseAge else {
+            return .failure(.noRecentGlucose)
         }
         guard let context = currentContext,
               context.token == request.contextToken,

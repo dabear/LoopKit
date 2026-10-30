@@ -186,6 +186,8 @@ public enum SmartwatchBolusError: Error, Equatable {
     case expiredRequest
     /// The request was made against an older state than the current one.
     case staleContext
+    /// No glucose reading in the last 15 minutes, as when the CGM is unavailable.
+    case noRecentGlucose
     case exceedsMaximumBolus
     case exceedsRecommendation
     /// Too soon after the previous watch bolus.
