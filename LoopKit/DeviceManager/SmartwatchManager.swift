@@ -314,6 +314,9 @@ public enum SmartwatchBolusError: Error, Equatable {
     case rateLimited
     /// Watch boluses in the last 24 hours would exceed the daily limit.
     case dailyLimitReached
+    /// One of the host's own checks refused it, beyond `SmartwatchBolusPolicy`
+    /// (for example Trio's max IOB). The reason is also in the host's log.
+    case refusedByHost(String)
     /// The same bolus is still being delivered; its result follows. Not a failure.
     case inProgress
     case deliveryFailed(String)
