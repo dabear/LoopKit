@@ -166,7 +166,9 @@ public struct SmartwatchBolusRequest: Equatable {
     public var units: Double
     /// `SmartwatchBolusContext.token` from the snapshot the watch showed.
     public var contextToken: UUID
-    /// When the user confirmed the bolus on the watch.
+    /// When the user confirmed the bolus on the watch. Take it from the watch, not from when the
+    /// command reached the phone, which can be much later; hosts refuse requests
+    /// older than 30 seconds.
     public var requestedAt: Date
     /// Asks the host to skip only its recommendation check; every other check
     /// (permission, ages, maximum bolus, rate limits) still applies.
@@ -180,16 +182,35 @@ public struct SmartwatchBolusRequest: Equatable {
     }
 }
 
+/// A mute the user confirmed on the watch, sent with `.remoteMute`.
+public struct SmartwatchAlertMuteRequest: Equatable {
+    /// How long to mute the host's alerts.
+    public var duration: TimeInterval
+    /// When the user confirmed it on the watch. Take it from the watch, not from when the
+    /// command reached the phone, which can be much later; hosts refuse requests
+    /// older than 30 seconds.
+    public var requestedAt: Date
+
+    public init(duration: TimeInterval, requestedAt: Date) {
+        self.duration = duration
+        self.requestedAt = requestedAt
+    }
+}
+
 /// Why the host refused a mute request from the watch.
 public enum SmartwatchAlertMuteError: Error, Equatable {
     /// The user hasn't allowed muting from the watch, or the plugin lacks `.remoteMute`.
     case notAllowed
+    /// The request is too old, or dated in the future.
+    case expiredRequest
 }
 
 /// Carbs the user confirmed on the watch, sent with `.remoteCarbs`.
 public struct SmartwatchCarbEntryRequest: Equatable {
     public var grams: Double
-    /// When the user confirmed the entry on the watch.
+    /// When the user confirmed the entry on the watch. Take it from the watch, not from when the
+    /// command reached the phone, which can be much later; hosts refuse requests
+    /// older than 30 seconds.
     public var requestedAt: Date
 
     public init(grams: Double, requestedAt: Date) {
@@ -242,7 +263,9 @@ public enum SmartwatchPresetAction: Equatable, Sendable {
 /// An override the user started or ended on the watch, sent with `.remoteOverride`.
 public struct SmartwatchOverrideRequest: Equatable {
     public var action: SmartwatchPresetAction
-    /// When the user confirmed it on the watch.
+    /// When the user confirmed it on the watch. Take it from the watch, not from when the
+    /// command reached the phone, which can be much later; hosts refuse requests
+    /// older than 30 seconds.
     public var requestedAt: Date
 
     public init(action: SmartwatchPresetAction, requestedAt: Date) {
@@ -254,7 +277,9 @@ public struct SmartwatchOverrideRequest: Equatable {
 /// A temp target the user started or ended on the watch, sent with `.remoteTempTarget`.
 public struct SmartwatchTempTargetRequest: Equatable {
     public var action: SmartwatchPresetAction
-    /// When the user confirmed it on the watch.
+    /// When the user confirmed it on the watch. Take it from the watch, not from when the
+    /// command reached the phone, which can be much later; hosts refuse requests
+    /// older than 30 seconds.
     public var requestedAt: Date
 
     public init(action: SmartwatchPresetAction, requestedAt: Date) {
@@ -534,12 +559,12 @@ public protocol SmartwatchManagerDelegate: AnyObject {
     /// - Throws: `SmartwatchBolusError`.
     func smartwatchManager(_ manager: SmartwatchManager, requestBolus request: SmartwatchBolusRequest) async throws -> Double
 
-    /// The user asked on the watch to mute the host's alerts for `duration`.
+    /// The user asked on the watch to mute the host's alerts.
     /// Only called with `.remoteMute`; the host decides whether its user allowed it.
     ///
     /// - Returns: When the mute ends.
     /// - Throws: `SmartwatchAlertMuteError`.
-    func smartwatchManager(_ manager: SmartwatchManager, requestAlertMute duration: TimeInterval) async throws -> Date
+    func smartwatchManager(_ manager: SmartwatchManager, requestAlertMute request: SmartwatchAlertMuteRequest) async throws -> Date
 
     /// The user asked on the watch to add carbs now. Only called with
     /// `.remoteCarbs`; the host decides whether its user allowed it.
@@ -567,7 +592,7 @@ public extension SmartwatchManagerDelegate {
         throw SmartwatchBolusError.notAllowed
     }
 
-    func smartwatchManager(_ manager: SmartwatchManager, requestAlertMute duration: TimeInterval) async throws -> Date {
+    func smartwatchManager(_ manager: SmartwatchManager, requestAlertMute request: SmartwatchAlertMuteRequest) async throws -> Date {
         throw SmartwatchAlertMuteError.notAllowed
     }
 
