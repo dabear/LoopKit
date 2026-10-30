@@ -16,7 +16,11 @@ final class SmartwatchRemoteActionPolicyTests: XCTestCase {
         SmartwatchBolusContext(token: token, issuedAt: now.addingTimeInterval(-issuedAgo), recommendedBolus: recommended, maximumBolus: maximum, supportedBolusVolumes: [])
     }
 
-    /// Rounds down to 0.05 U, like a typical pump.
+    /// 0.05 U steps, built like the pumps build theirs. Dividing by 0.05 instead
+    /// would turn 1.15 into 1.10 (1.15 / 0.05 is 22.999… in floating point).
+    private static let supportedVolumes = (1...600).map { Double($0) / 20 }
+
+    /// Rounds down to a supported volume, like OmniPumpManager.
     private func policy(
         allowed: Bool = true,
         context: SmartwatchBolusContext? = nil,
@@ -26,7 +30,7 @@ final class SmartwatchRemoteActionPolicyTests: XCTestCase {
             isAllowed: allowed,
             currentContext: context ?? self.context(),
             recentDeliveries: deliveries,
-            roundToSupportedVolume: { ($0 / 0.05).rounded(.down) * 0.05 }
+            roundToSupportedVolume: { units in Self.supportedVolumes.last { $0 <= units } ?? 0 }
         )
     }
 
@@ -37,6 +41,10 @@ final class SmartwatchRemoteActionPolicyTests: XCTestCase {
     func testDeliversARoundedBolusWithinTheRecommendation() throws {
         let units = try policy().evaluate(request(1.53), now: now).get()
         XCTAssertEqual(units, 1.5, accuracy: 0.0001)
+    }
+
+    func testKeepsASupportedVolume() {
+        XCTAssertEqual(try? policy().evaluate(request(1.15), now: now).get(), 1.15)
     }
 
     func testAllowsExactlyTheRecommendation() {
